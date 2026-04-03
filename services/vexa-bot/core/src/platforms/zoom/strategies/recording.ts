@@ -6,6 +6,48 @@ import { setActiveRecordingService } from '../../../index';
 import { getSDKManager } from './join';
 import { log } from '../../../utils';
 import { spawn, ChildProcess } from 'child_process';
+import { createClient } from 'redis';
+
+// Redis client for forwarding transcript segments to the transcription-collector stream
+let redisClient: ReturnType<typeof createClient> | null = null;
+
+async function getRedisClient(): Promise<ReturnType<typeof createClient> | null> {
+  if (redisClient) return redisClient;
+  try {
+    const redisUrl = process.env.REDIS_URL || 'redis://redis:6379/0';
+    const client = createClient({ url: redisUrl });
+    client.on('error', (err) => log(`[Zoom Redis] Error: ${err.message}`));
+    await client.connect();
+    log('[Zoom Redis] Connected');
+    redisClient = client;
+    return client;
+  } catch (err: any) {
+    log(`[Zoom Redis] Failed to connect: ${err.message}`);
+    return null;
+  }
+}
+
+async function forwardTranscriptToRedis(botConfig: BotConfig, segments: any[], sessionUid: string): Promise<void> {
+  const client = await getRedisClient();
+  if (!client) return;
+
+  const streamKey = 'transcription_segments';
+  const payload = {
+    type: 'transcription',
+    token: botConfig.token || '',
+    platform: botConfig.platform || 'zoom',
+    meeting_id: botConfig.meeting_id || '',
+    native_meeting_id: (botConfig as any).nativeMeetingId || '',
+    session_uid: sessionUid,
+    segments: JSON.stringify(segments),
+  };
+
+  try {
+    await client.xAdd(streamKey, '*', payload as any);
+  } catch (err: any) {
+    log(`[Zoom] Failed to forward transcript to Redis: ${err.message}`);
+  }
+}
 
 let whisperLive: WhisperLiveService | null = null;
 let whisperSocket: WebSocket | null = null;
@@ -42,6 +84,14 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
           // Handle incoming messages (transcriptions, etc.)
           if (data.message === 'SERVER_READY') {
             log('[Zoom] WhisperLive server ready');
+          }
+
+          // Forward transcript segments to Redis for the transcription-collector
+          if (Array.isArray(data.segments) && data.segments.length > 0) {
+            const sessionUid = botConfig.connectionId || String(botConfig.meeting_id) || 'unknown';
+            forwardTranscriptToRedis(botConfig, data.segments, sessionUid).catch((err) => {
+              log(`[Zoom] Error forwarding transcript to Redis: ${err?.message || String(err)}`);
+            });
           }
         },
         (error: Event) => {

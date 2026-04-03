@@ -14,6 +14,62 @@ import {
   googleSpeakingIndicators,
   googlePeopleButtonSelectors
 } from "./selectors";
+import { createClient, RedisClientType } from 'redis';
+
+// Redis client for forwarding transcript segments to the transcription-collector stream
+let redisClient: RedisClientType | null = null;
+let redisConnected = false;
+
+async function getRedisClient(redisUrl: string): Promise<RedisClientType | null> {
+  if (redisClient) return redisClient;
+  try {
+    redisClient = createClient({ url: redisUrl }) as RedisClientType;
+    redisClient.on('error', (err) => log(`[Google Recording] Redis error: ${err.message}`));
+    await redisClient.connect();
+    redisConnected = true;
+    log('[Google Recording] Redis client connected for transcript forwarding');
+    return redisClient;
+  } catch (err: any) {
+    log(`[Google Recording] Failed to connect Redis for transcript forwarding: ${err.message}`);
+    redisClient = null;
+    return null;
+  }
+}
+
+async function forwardTranscriptToRedis(
+  botConfig: BotConfig,
+  segments: any[],
+  sessionUid: string
+): Promise<void> {
+  if (!segments || segments.length === 0) return;
+
+  const client = await getRedisClient(botConfig.redisUrl);
+  if (!client) return;
+
+  const streamKey = 'transcription_segments';
+  const payload = JSON.stringify({
+    type: 'transcription',
+    token: botConfig.token,
+    platform: botConfig.platform,
+    meeting_id: botConfig.meeting_id,
+    segments: segments,
+    uid: sessionUid,
+  });
+
+  try {
+    await client.xAdd(streamKey, '*', { payload });
+    const completedTexts = segments
+      .filter((s: any) => s?.completed && s?.text)
+      .map((s: any) => s.text)
+      .join(' ')
+      .trim();
+    if (completedTexts) {
+      log(`[Google Recording] Forwarded ${segments.length} segments to Redis: "${completedTexts.substring(0, 80)}..."`);
+    }
+  } catch (err: any) {
+    log(`[Google Recording] Failed to forward transcript to Redis: ${err.message}`);
+  }
+}
 
 // Modified to use new services - Google Meet recording functionality
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
@@ -72,6 +128,17 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
   } else {
     log("[Google Recording] Audio capture disabled by config.");
   }
+
+  // Expose transcript forwarding function to browser context
+  await page.exposeFunction("__vexaForwardTranscriptSegments", async (payload: { segments: any[]; sessionUid: string }) => {
+    try {
+      await forwardTranscriptToRedis(botConfig, payload.segments || [], payload.sessionUid);
+      return true;
+    } catch (error: any) {
+      log(`[Google Recording] Failed to forward transcript segments: ${error?.message || String(error)}`);
+      return false;
+    }
+  });
 
   await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
@@ -445,6 +512,14 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                         (window as any).__lastTranscript = transcriptKey;
                         logFn(`Transcript: ${transcriptKey}`);
                       }
+                    }
+                    // Forward ALL segments to Node.js for Redis streaming
+                    const sessionUid = whisperLiveService?.connection?.sessionUid || (window as any).__vexaBotConfig?.connectionId || '';
+                    if (typeof (window as any).__vexaForwardTranscriptSegments === 'function') {
+                      (window as any).__vexaForwardTranscriptSegments({
+                        segments: data.segments,
+                        sessionUid: sessionUid
+                      }).catch((err: any) => logFn(`Failed to forward transcript: ${err?.message || err}`));
                     }
                   }
                 };
