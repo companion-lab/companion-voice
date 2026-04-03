@@ -950,17 +950,37 @@ async def websocket_multiplex(ws: WebSocket):
         ]
 
         async def fan_in(channel_names: List[str]):
-            pubsub = redis.pubsub()
-            await pubsub.subscribe(*channel_names)
             try:
+                pubsub = redis.pubsub()
+                await pubsub.subscribe(*channel_names)
+                print(f"[WS] Subscribed to channels: {channel_names}", flush=True)
                 async for message in pubsub.listen():
-                    if message.get("type") != "message":
+                    msg_type = message.get("type")
+                    msg_channel = message.get("channel")
+                    print(f"[WS] PubSub message: type={msg_type}, channel={msg_channel}", flush=True)
+                    if msg_type != "message":
                         continue
                     data = message.get("data")
+                    print(f"[WS] Forwarding message to WS client: {data[:100]}...", flush=True)
                     try:
+                        # Enrich the message with platform and native_id so the companion
+                        # can correctly map it to the active meeting in its store
+                        try:
+                            enriched = json.loads(data)
+                            if "meeting" not in enriched:
+                                enriched["meeting"] = {}
+                            enriched["meeting"]["platform"] = platform
+                            enriched["meeting"]["native_id"] = native_id
+                            enriched["meeting"]["id"] = int(meeting_id)
+                            data = json.dumps(enriched)
+                        except Exception:
+                            pass  # Forward raw data if parsing fails
                         await ws.send_text(data)
-                    except Exception:
+                    except Exception as e:
+                        print(f"[WS] Failed to send to WS client: {e}", flush=True)
                         break
+            except Exception as e:
+                print(f"[WS] fan_in error: {e}", flush=True)
             finally:
                 try:
                     await pubsub.unsubscribe(*channel_names)
@@ -1027,9 +1047,33 @@ async def websocket_multiplex(ws: WebSocket):
                     for item in authorized:
                         plat = item.get("platform"); nid = item.get("native_id")
                         user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
+                        print(f"[WS] Processing authorized item: {item}", flush=True)
                         if plat and nid and user_id and meeting_id:
+                            # First, fetch existing segments from transcription-collector
+                            try:
+                                tc_url = f"http://companion-platform-vexa-transcription-collector-1:8000/internal/transcripts/{meeting_id}"
+                                tc_resp = await app.state.http_client.get(tc_url, headers={"X-API-Key": api_key})
+                                if tc_resp.status_code == 200:
+                                    existing_segments = tc_resp.json()
+                                    if existing_segments:
+                                        print(f"[WS] Sending {len(existing_segments)} existing segments for meeting {meeting_id}", flush=True)
+                                        await ws.send_text(json.dumps({
+                                            "type": "transcript.mutable",
+                                            "meeting": {"platform": plat, "native_id": nid, "id": int(meeting_id)},
+                                            "payload": {"segments": existing_segments}
+                                        }))
+                                    else:
+                                        print(f"[WS] No existing segments for meeting {meeting_id}", flush=True)
+                                else:
+                                    print(f"[WS] Failed to fetch existing segments: {tc_resp.status_code}", flush=True)
+                            except Exception as e:
+                                print(f"[WS] Error fetching existing segments: {e}", flush=True)
+                            
                             await subscribe_meeting(plat, nid, user_id, meeting_id)
                             subscribed.append({"platform": plat, "native_id": nid})
+                        else:
+                            print(f"[WS] Skipping item - missing fields: {item}", flush=True)
+                    print(f"[WS] Sending subscribed response: {subscribed}", flush=True)
                     await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
                 except Exception as e:
                     await ws.send_text(json.dumps({"type": "error", "error": "authorization_call_failed", "details": str(e)}))
