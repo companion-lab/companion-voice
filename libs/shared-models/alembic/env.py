@@ -20,6 +20,8 @@ if config.config_file_name is not None:
 # Add the project's root directory to the Python path.
 # This ensures that alembic can find your models.
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
+# Also try the direct parent (for when shared-models is installed as a package)
+sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Now we can import our models
 from shared_models.models import Base
