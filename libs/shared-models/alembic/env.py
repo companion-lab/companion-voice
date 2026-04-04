@@ -4,6 +4,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from sqlalchemy import text
 
 from alembic import context
 
@@ -29,9 +30,10 @@ target_metadata = Base.metadata
 # Load environment variables for database connection
 DB_HOST = os.environ.get("DB_HOST", "postgres")
 DB_PORT = os.environ.get("DB_PORT", "5432")
-DB_NAME = os.environ.get("DB_NAME", "vexa")
+DB_NAME = os.environ.get("DB_NAME", "postgres")
 DB_USER = os.environ.get("DB_USER", "postgres")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "postgres")
+DB_SCHEMA = (os.environ.get("DB_SCHEMA") or "vexa").strip() or "vexa"
 # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
 # For Supabase and most remote databases, use "require" or "prefer"
 DB_SSL_MODE = os.environ.get("DB_SSL_MODE", "prefer")
@@ -62,9 +64,13 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
+        version_table_schema=DB_SCHEMA,
     )
 
     with context.begin_transaction():
+        context.execute(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"')
+        context.execute(f'SET search_path TO "{DB_SCHEMA}"')
         context.run_migrations()
 
 
@@ -79,11 +85,17 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"options": f"-csearch_path={DB_SCHEMA}"},
     )
 
     with connectable.connect() as connection:
+        connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"'))
+        connection.execute(text(f'SET search_path TO "{DB_SCHEMA}"'))
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_schemas=True,
+            version_table_schema=DB_SCHEMA,
         )
 
         with context.begin_transaction():

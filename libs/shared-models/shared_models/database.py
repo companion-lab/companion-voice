@@ -17,6 +17,7 @@ DB_PORT = os.environ.get("DB_PORT")
 DB_NAME = os.environ.get("DB_NAME")
 DB_USER = os.environ.get("DB_USER")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
+DB_SCHEMA = (os.environ.get("DB_SCHEMA") or "vexa").strip() or "vexa"
 # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
 # For Supabase and most remote databases, use "require" or "prefer"
 DB_SSL_MODE = os.environ.get("DB_SSL_MODE", "prefer")
@@ -66,7 +67,9 @@ elif DB_SSL_MODE and DB_SSL_MODE.lower() == "disable":
 
 # --- SQLAlchemy Async Engine & Session --- 
 # Use pool settings appropriate for async connections
-connect_args = {}
+connect_args = {
+    "server_settings": {"search_path": DB_SCHEMA},
+}
 if asyncpg_ssl is not None:
     connect_args["ssl"] = asyncpg_ssl
 
@@ -88,7 +91,10 @@ async_session_local = sessionmaker(
 )
 
 # --- Sync Engine (For Alembic migrations) ---
-sync_engine = create_engine(DATABASE_URL_SYNC)
+sync_engine = create_engine(
+    DATABASE_URL_SYNC,
+    connect_args={"options": f"-csearch_path={DB_SCHEMA}"},
+)
 
 # --- FastAPI Dependency --- 
 async def get_db() -> AsyncSession:
@@ -103,9 +109,10 @@ async def get_db() -> AsyncSession:
 # --- Initialization Function --- 
 async def init_db():
     """Creates database tables based on shared models' metadata."""
-    logger.info(f"Initializing database tables at {DB_HOST}:{DB_PORT}/{DB_NAME}")
+    logger.info(f"Initializing database tables at {DB_HOST}:{DB_PORT}/{DB_NAME} schema={DB_SCHEMA}")
     try:
         async with engine.begin() as conn:
+            await conn.execute(text(f'SET search_path TO "{DB_SCHEMA}"'))
             # This relies on all SQLAlchemy models being imported 
             # somewhere before this runs, so Base.metadata is populated.
             # Add checkfirst=True to prevent errors if tables already exist
@@ -121,24 +128,21 @@ async def recreate_db():
     DANGEROUS: Drops all tables and recreates them based on shared models' metadata.
     THIS WILL RESULT IN COMPLETE DATA LOSS. USE WITH EXTREME CAUTION.
     """
-    logger.warning(f"!!! DANGEROUS OPERATION: Dropping and recreating all tables in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
+    logger.warning(f"!!! DANGEROUS OPERATION: Dropping and recreating schema {DB_SCHEMA} in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     try:
         async with engine.begin() as conn:
-            # Instead of drop_all, use raw SQL to drop the schema with cascade
-            logger.warning("Dropping public schema with CASCADE...")
-            await conn.execute(text("DROP SCHEMA public CASCADE;"))
-            logger.warning("Public schema dropped.")
-            logger.info("Recreating public schema...")
-            await conn.execute(text("CREATE SCHEMA public;"))
-            # Optional: Grant permissions if needed (often handled by default roles)
-            # await conn.execute(text("GRANT ALL ON SCHEMA public TO public;")) 
-            # await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres;")) 
-            logger.info("Public schema recreated.")
+            logger.warning(f"Dropping schema {DB_SCHEMA} with CASCADE...")
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{DB_SCHEMA}" CASCADE;'))
+            logger.warning(f"Schema {DB_SCHEMA} dropped.")
+            logger.info(f"Recreating schema {DB_SCHEMA}...")
+            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}";'))
+            await conn.execute(text(f'SET search_path TO "{DB_SCHEMA}"'))
+            logger.info(f"Schema {DB_SCHEMA} recreated.")
             
             logger.info("Recreating all tables based on models...")
             await conn.run_sync(Base.metadata.create_all)
             logger.info("All tables recreated successfully.")
-        logger.warning(f"!!! DANGEROUS OPERATION COMPLETE for {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
+        logger.warning(f"!!! DANGEROUS OPERATION COMPLETE for schema {DB_SCHEMA} in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     except Exception as e:
         logger.error(f"Error recreating database tables: {e}", exc_info=True)
         raise 

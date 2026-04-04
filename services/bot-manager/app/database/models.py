@@ -51,16 +51,18 @@ class Transcription(Base):
         return f"<Transcription(id={self.id}, meeting_id='{self.meeting_id}', timestamp='{self.timestamp}')>"
 
 # Database connection
+DB_SCHEMA = (os.getenv("DB_SCHEMA") or "vexa").strip() or "vexa"
+
 def get_engine():
     """Get SQLAlchemy engine using environment variables for configuration"""
     db_host = os.getenv("DB_HOST", "postgres")
     db_port = os.getenv("DB_PORT", "5432")
-    db_name = os.getenv("DB_NAME", "vexa")
+    db_name = os.getenv("DB_NAME", "postgres")
     db_user = os.getenv("DB_USER", "postgres")
     db_password = os.getenv("DB_PASSWORD", "postgres")
     
     connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-    return create_engine(connection_string)
+    return create_engine(connection_string, connect_args={"options": f"-csearch_path={DB_SCHEMA}"})
 
 def get_session():
     """Create a new database session"""
@@ -71,4 +73,4 @@ def get_session():
 def init_db():
     """Initialize database with tables"""
     engine = get_engine()
-    Base.metadata.create_all(engine) 
+    Base.metadata.create_all(engine)
