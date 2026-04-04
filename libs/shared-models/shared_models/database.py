@@ -23,7 +23,9 @@ DB_SCHEMA = (os.environ.get("DB_SCHEMA") or "vexa").strip() or "vexa"
 DB_SSL_MODE = os.environ.get("DB_SSL_MODE", "prefer")
 
 # --- Validation at startup ---
-if not all([DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD]):
+# Allow empty DB_PASSWORD when using Unix socket (trust auth)
+password_required = not (DB_HOST and DB_HOST.startswith('/'))
+if not all([DB_HOST, DB_PORT, DB_NAME, DB_USER]):
     missing_vars = [
         var_name
         for var_name, var_value in {
@@ -31,11 +33,12 @@ if not all([DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD]):
             "DB_PORT": DB_PORT,
             "DB_NAME": DB_NAME,
             "DB_USER": DB_USER,
-            "DB_PASSWORD": DB_PASSWORD,
         }.items()
         if not var_value
     ]
     raise ValueError(f"Missing required database environment variables: {', '.join(missing_vars)}")
+if password_required and not DB_PASSWORD:
+    raise ValueError("Missing required database environment variable: DB_PASSWORD")
 
 # Build connection URLs with SSL support
 # For asyncpg: SSL is handled via connect_args, not URL query parameters
@@ -91,10 +94,22 @@ async_session_local = sessionmaker(
 )
 
 # --- Sync Engine (For Alembic migrations) ---
-sync_engine = create_engine(
-    DATABASE_URL_SYNC,
-    connect_args={"options": f"-csearch_path={DB_SCHEMA}"},
-)
+# Handle Unix socket connections (DB_HOST starting with /)
+if DB_HOST and DB_HOST.startswith('/'):
+    DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}?host={DB_HOST}"
+    sync_engine = create_engine(
+        DATABASE_URL_SYNC,
+        connect_args={"options": f"-csearch_path={DB_SCHEMA}"},
+    )
+else:
+    sync_engine = create_engine(
+        DATABASE_URL_SYNC,
+        connect_args={"options": f"-csearch_path={DB_SCHEMA}"},
+    )
+
+def get_sync_engine():
+    """Return the sync engine for Alembic migrations."""
+    return sync_engine
 
 # --- FastAPI Dependency --- 
 async def get_db() -> AsyncSession:
