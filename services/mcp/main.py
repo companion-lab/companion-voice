@@ -747,7 +747,7 @@ async def delete_meeting(
 # ---------------------------
 # MCP & Server
 # ---------------------------
-mcp = FastApiMCP(app, headers=["authorization", "x-api-key"])
+mcp = FastApiMCP(app)
 
 # ---------------------------
 # MCP Prompts (agent guidance)
