@@ -41,8 +41,14 @@ DB_SCHEMA = (os.environ.get("DB_SCHEMA") or "vexa").strip() or "vexa"
 DB_SSL_MODE = os.environ.get("DB_SSL_MODE", "prefer")
 
 # Build connection URL with SSL support
-ssl_params = f"?sslmode={DB_SSL_MODE}" if DB_SSL_MODE else ""
-DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}{ssl_params}"
+# Handle Unix socket connections (when DB_HOST is a path)
+if DB_HOST.startswith('/'):
+    # Unix socket: use host parameter in query string
+    ssl_params = f"&sslmode={DB_SSL_MODE}" if DB_SSL_MODE else ""
+    DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}?host={DB_HOST}{ssl_params}"
+else:
+    ssl_params = f"?sslmode={DB_SSL_MODE}" if DB_SSL_MODE else ""
+    DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}{ssl_params}"
 
 # Set the database URL
 config.set_main_option('sqlalchemy.url', DATABASE_URL_SYNC)
