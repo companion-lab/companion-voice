@@ -926,7 +926,7 @@ async def _get_prompt(name: str, arguments: Optional[Dict[str, str]] = None) -> 
 
     raise ValueError(f"Unknown prompt: {name}")
 
-mcp.mount_http()
+mcp.mount(app)
 
 if __name__ == "__main__":
     import uvicorn
