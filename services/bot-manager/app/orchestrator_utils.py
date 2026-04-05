@@ -231,11 +231,11 @@ async def start_bot_container(
             "noOneJoinedTimeout": 120000,
             "everyoneLeftTimeout": 60000
         },
-        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited",
+        "botManagerCallbackUrl": os.getenv("BOT_CALLBACK_URL", f"http://bot-manager:8080/bots/internal/callback/exited"),
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
         "transcribeEnabled": True if transcribe_enabled is None else bool(transcribe_enabled),
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
-        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload"
+        "recordingUploadUrl": os.getenv("BOT_RECORDING_UPLOAD_URL", f"http://bot-manager:8080/internal/recordings/upload")
     }
     if recording_enabled is not None:
         bot_config_data["recordingEnabled"] = bool(recording_enabled)
