@@ -37,7 +37,7 @@ from app.orchestrators.common import enforce_user_concurrency_limit, count_user_
 from sqlalchemy import select as sa_select
 
 # Assuming these are still needed from config or env
-DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
+DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
 DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexa-bot:dev")
 
