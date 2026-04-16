@@ -801,13 +801,15 @@ async def request_bot(
                         "Continuing without OBF token."
                     )
 
+        effective_bot_name = (req.bot_name or "").strip() or "member-org's companion"
+
         logger.info(f"Attempting to start bot container for meeting {meeting_id} (native: {native_meeting_id})...")
         container_id, connection_id = await start_bot_container(
             user_id=current_user.id,
             meeting_id=meeting_id, # Internal DB ID
             meeting_url=constructed_url,
             platform=req.platform.value,
-            bot_name=req.bot_name,
+            bot_name=effective_bot_name,
             user_token=user_token,
             native_meeting_id=native_meeting_id,
             language=req.language,
