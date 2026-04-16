@@ -529,10 +529,8 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 const onClose = async (event: CloseEvent) => {
                   (window as any).logBot(`[Google Meet Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}. Attempting reconnect in 2s...`);
                   try { whisperLiveService.setServerReady(false); } catch {}
-                  setTimeout(() => {
-                    // Best-effort reconnect; BrowserWhisperLiveService stubborn mode should also help
-                    connectWhisper().catch(() => {});
-                  }, 2000);
+                  // NOTE: BrowserWhisperLiveService is in stubborn mode and owns reconnect logic.
+                  // Avoid creating parallel reconnect loops here.
                 };
 
                 // Save callbacks globally for reuse
