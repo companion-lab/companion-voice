@@ -1051,7 +1051,8 @@ async def websocket_multiplex(ws: WebSocket):
                         if plat and nid and user_id and meeting_id:
                             # First, fetch existing segments from transcription-collector
                             try:
-                                tc_url = f"http://companion-platform-vexa-transcription-collector-1:8000/internal/transcripts/{meeting_id}"
+                                tc_base = TRANSCRIPTION_COLLECTOR_URL.rstrip("/")
+                                tc_url = f"{tc_base}/internal/transcripts/{meeting_id}"
                                 tc_resp = await app.state.http_client.get(tc_url, headers={"X-API-Key": api_key})
                                 if tc_resp.status_code == 200:
                                     existing_segments = tc_resp.json()
