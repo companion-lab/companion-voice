@@ -37,17 +37,31 @@ export async function joinGoogleMeeting(
   await page.waitForTimeout(randomDelay(1000));
   log("Attempting to find name input field...");
   
-  // Use selector from selectors.ts instead of inline
-  const nameFieldSelector = googleNameInputSelectors[0];
-  await page.waitForSelector(nameFieldSelector, { timeout: 120000 }); // 120 seconds
-  log("Name input field found.");
+  // Try all known name field selectors (Google Meet UI variants)
+  let nameFieldSelector: string | null = null;
+  for (const selector of googleNameInputSelectors) {
+    try {
+      await page.waitForSelector(selector, { timeout: 8000 });
+      nameFieldSelector = selector;
+      log(`Name input field found with selector: ${selector}`);
+      break;
+    } catch {
+      // try next selector
+    }
+  }
+
+  if (!nameFieldSelector) {
+    log("Name input field not found. Continuing without filling name (likely already authenticated flow).");
+  }
   
   // Take screenshot after finding name field
   await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true });
   log("📸 Screenshot taken: Name input field found");
 
-  await page.waitForTimeout(randomDelay(1000));
-  await page.fill(nameFieldSelector, botName);
+  if (nameFieldSelector) {
+    await page.waitForTimeout(randomDelay(1000));
+    await page.fill(nameFieldSelector, botName);
+  }
 
   // Mute mic and camera if available
   try {
