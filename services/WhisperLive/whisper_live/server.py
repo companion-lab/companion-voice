@@ -2758,7 +2758,30 @@ class ServeClientFasterWhisper(ServeClientBase):
         self.same_output_threshold = server_options.get("same_output_threshold", 10)
         self.end_time_for_same_output = None
 
-        preferred_device = "cuda" if torch.cuda.is_available() else "cpu"
+        force_cpu = os.getenv("WL_FORCE_CPU", "").strip().lower() in ("1", "true", "yes", "on")
+        cuda_available = False
+        cudnn_available = False
+        try:
+            cuda_available = bool(torch.cuda.is_available())
+        except Exception:
+            cuda_available = False
+        if cuda_available:
+            try:
+                cudnn_available = bool(torch.backends.cudnn.is_available())
+            except Exception:
+                cudnn_available = False
+
+        if force_cpu:
+            preferred_device = "cpu"
+            logging.info(f"FasterWhisper client {client_uid}: WL_FORCE_CPU enabled, using CPU")
+        elif cuda_available and cudnn_available:
+            preferred_device = "cuda"
+        else:
+            preferred_device = "cpu"
+            if cuda_available and not cudnn_available:
+                logging.warning(
+                    f"FasterWhisper client {client_uid}: CUDA is available but cuDNN is missing; falling back to CPU"
+                )
         if preferred_device == "cuda":
             try:
                 major, _ = torch.cuda.get_device_capability(0)
