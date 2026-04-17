@@ -35,70 +35,150 @@ export class BrowserAudioService {
   }
 
   async findMediaElements(retries: number = 10, delay: number = 3000): Promise<HTMLMediaElement[]> {
+    const fallbackThreshold = Math.min(3, retries);
+
+    const getElementStream = (
+      el: any
+    ): { stream: MediaStream; sourceType: string } | null => {
+      if (el.srcObject instanceof MediaStream) {
+        return { stream: el.srcObject, sourceType: "srcObject" };
+      }
+
+      if (typeof el.captureStream === "function") {
+        try {
+          const captured = el.captureStream();
+          if (captured instanceof MediaStream) {
+            return { stream: captured, sourceType: "captureStream" };
+          }
+        } catch {
+          // Ignore captureStream errors and continue fallback probing.
+        }
+      }
+
+      if (typeof el.mozCaptureStream === "function") {
+        try {
+          const captured = el.mozCaptureStream();
+          if (captured instanceof MediaStream) {
+            return { stream: captured, sourceType: "mozCaptureStream" };
+          }
+        } catch {
+          // Ignore mozCaptureStream errors and continue fallback probing.
+        }
+      }
+
+      return null;
+    };
+
     for (let i = 0; i < retries; i++) {
       // Get all media elements
       const allMediaElements = Array.from(document.querySelectorAll("audio, video")) as HTMLMediaElement[];
       (window as any).logBot(`[Audio] Attempt ${i + 1}/${retries}: Found ${allMediaElements.length} total media elements in DOM`);
-      
-      // Filter for active media elements with proper checks
-      const mediaElements = allMediaElements.filter((el: any) => {
-        // Check if element has srcObject
-        if (!el.srcObject) {
-          return false;
-        }
-        
-        // Check if srcObject is a MediaStream
-        if (!(el.srcObject instanceof MediaStream)) {
-          return false;
-        }
-        
-        // Check if MediaStream has audio tracks
-        const audioTracks = el.srcObject.getAudioTracks();
-        if (audioTracks.length === 0) {
-          return false;
-        }
-        
-        // Check if element is not paused (like Node.js version)
-        if (el.paused) {
-          (window as any).logBot(`[Audio] Element found but is paused (readyState: ${el.readyState})`);
-          return false;
-        }
-        
-        // Check readyState - prefer elements that have loaded metadata or more
-        // 0 = HAVE_NOTHING, 1 = HAVE_METADATA, 2 = HAVE_CURRENT_DATA, 3 = HAVE_FUTURE_DATA, 4 = HAVE_ENOUGH_DATA
-        if (el.readyState < 1) {
-          (window as any).logBot(`[Audio] Element found but readyState is ${el.readyState} (HAVE_NOTHING)`);
-          return false;
-        }
-        
-        // Check if audio tracks are enabled
-        const hasEnabledTracks = audioTracks.some((track: MediaStreamTrack) => track.enabled && !track.muted);
-        if (!hasEnabledTracks) {
-          (window as any).logBot(`[Audio] Element found but all audio tracks are disabled or muted`);
-          return false;
-        }
-        
-        return true;
-      });
 
-      if (mediaElements.length > 0) {
-        (window as any).logBot(`✅ Found ${mediaElements.length} active media elements with audio tracks after ${i + 1} attempt(s).`);
-        // Log details about found elements
-        mediaElements.forEach((el: any, idx: number) => {
-          const tracks = el.srcObject.getAudioTracks();
-          (window as any).logBot(`  Element ${idx + 1}: paused=${el.paused}, readyState=${el.readyState}, tracks=${tracks.length}, enabled=${tracks.filter((t: MediaStreamTrack) => t.enabled).length}`);
+      const candidates = allMediaElements
+        .map((el: any) => {
+          const streamInfo = getElementStream(el);
+          if (!streamInfo) {
+            return null;
+          }
+
+          const audioTracks = streamInfo.stream.getAudioTracks();
+          if (audioTracks.length === 0) {
+            return null;
+          }
+
+          const endedTrackCount = audioTracks.filter(
+            (track: MediaStreamTrack) => track.readyState === "ended"
+          ).length;
+          const liveTrackCount = audioTracks.length - endedTrackCount;
+          if (liveTrackCount <= 0) {
+            return null;
+          }
+
+          const enabledTrackCount = audioTracks.filter(
+            (track: MediaStreamTrack) => track.enabled
+          ).length;
+          const mutedTrackCount = audioTracks.filter(
+            (track: MediaStreamTrack) => track.muted
+          ).length;
+
+          const isActiveElement = !el.paused && el.readyState >= 1;
+
+          return {
+            element: el,
+            sourceType: streamInfo.sourceType,
+            audioTrackCount: audioTracks.length,
+            liveTrackCount,
+            enabledTrackCount,
+            mutedTrackCount,
+            paused: !!el.paused,
+            readyState: Number(el.readyState || 0),
+            isActiveElement,
+          };
+        })
+        .filter(Boolean) as Array<{
+        element: HTMLMediaElement;
+        sourceType: string;
+        audioTrackCount: number;
+        liveTrackCount: number;
+        enabledTrackCount: number;
+        mutedTrackCount: number;
+        paused: boolean;
+        readyState: number;
+        isActiveElement: boolean;
+      }>;
+
+      const activeCandidates = candidates.filter((candidate) => candidate.isActiveElement);
+      if (activeCandidates.length > 0) {
+        (window as any).logBot(
+          `✅ Found ${activeCandidates.length} active media elements with live audio tracks after ${i + 1} attempt(s).`
+        );
+        activeCandidates.forEach((candidate, idx: number) => {
+          (window as any).logBot(
+            `  Active ${idx + 1}: paused=${candidate.paused}, readyState=${candidate.readyState}, ` +
+            `tracks=${candidate.audioTrackCount}, live=${candidate.liveTrackCount}, ` +
+            `enabled=${candidate.enabledTrackCount}, muted=${candidate.mutedTrackCount}, source=${candidate.sourceType}`
+          );
         });
-        return mediaElements;
+        return activeCandidates.map((candidate) => candidate.element);
       }
-      
+
+      if (candidates.length > 0) {
+        const shouldUseFallbackNow = i + 1 >= fallbackThreshold || i === retries - 1;
+        if (shouldUseFallbackNow) {
+          (window as any).logBot(
+            `[Audio] Using ${candidates.length} fallback media element(s) with live audio tracks ` +
+            `(attempt ${i + 1}/${retries}).`
+          );
+          candidates.forEach((candidate, idx: number) => {
+            (window as any).logBot(
+              `  Fallback ${idx + 1}: paused=${candidate.paused}, readyState=${candidate.readyState}, ` +
+              `tracks=${candidate.audioTrackCount}, live=${candidate.liveTrackCount}, ` +
+              `enabled=${candidate.enabledTrackCount}, muted=${candidate.mutedTrackCount}, source=${candidate.sourceType}`
+            );
+          });
+          return candidates.map((candidate) => candidate.element);
+        }
+
+        (window as any).logBot(
+          `[Audio] Found ${candidates.length} media element(s) with live audio tracks but none active yet. ` +
+          `Waiting for active state before fallback (${i + 1}/${fallbackThreshold}).`
+        );
+      }
+
       // Enhanced diagnostic logging
       if (allMediaElements.length > 0) {
         (window as any).logBot(`[Audio] Found ${allMediaElements.length} media elements but none are active. Details:`);
         allMediaElements.forEach((el: any, idx: number) => {
-          const hasSrcObject = !!el.srcObject;
-          const isMediaStream = el.srcObject instanceof MediaStream;
-          const audioTracks = isMediaStream ? el.srcObject.getAudioTracks().length : 0;
-          (window as any).logBot(`  Element ${idx + 1}: paused=${el.paused}, readyState=${el.readyState}, hasSrcObject=${hasSrcObject}, isMediaStream=${isMediaStream}, audioTracks=${audioTracks}`);
+          const streamInfo = getElementStream(el);
+          const audioTracks = streamInfo ? streamInfo.stream.getAudioTracks() : [];
+          const liveTracks = audioTracks.filter((track: MediaStreamTrack) => track.readyState !== "ended");
+          const enabledTracks = audioTracks.filter((track: MediaStreamTrack) => track.enabled);
+          const mutedTracks = audioTracks.filter((track: MediaStreamTrack) => track.muted);
+          (window as any).logBot(
+            `  Element ${idx + 1}: paused=${el.paused}, readyState=${el.readyState}, ` +
+            `streamSource=${streamInfo?.sourceType || "none"}, audioTracks=${audioTracks.length}, ` +
+            `liveTracks=${liveTracks.length}, enabledTracks=${enabledTracks.length}, mutedTracks=${mutedTracks.length}`
+          );
         });
       } else {
         (window as any).logBot(`[Audio] No media elements found in DOM at all`);
