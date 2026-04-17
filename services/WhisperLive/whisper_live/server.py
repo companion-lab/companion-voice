@@ -2758,26 +2758,25 @@ class ServeClientFasterWhisper(ServeClientBase):
         self.same_output_threshold = server_options.get("same_output_threshold", 10)
         self.end_time_for_same_output = None
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cuda":
-            major, _ = torch.cuda.get_device_capability(device)
-            self.compute_type = "float16" if major >= 7 else "float32"
+        preferred_device = "cuda" if torch.cuda.is_available() else "cpu"
+        if preferred_device == "cuda":
+            try:
+                major, _ = torch.cuda.get_device_capability(0)
+                self.compute_type = "float16" if major >= 7 else "float32"
+            except Exception as e:
+                logging.warning(
+                    f"FasterWhisper client {client_uid}: failed to read CUDA capability ({e}), defaulting compute_type=float16"
+                )
+                self.compute_type = "float16"
         else:
             self.compute_type = "default" #"int8" #NOTE: maybe we use default here...
 
         if self.model_size_or_path is None:
             return
-        logging.info(f"Using Device={device} with precision {self.compute_type}")
+        logging.info(f"Using preferred Device={preferred_device} with precision {self.compute_type}")
     
         try:
-            if single_model:
-                if ServeClientFasterWhisper.SINGLE_MODEL is None:
-                    self.create_model(device)
-                    ServeClientFasterWhisper.SINGLE_MODEL = self.transcriber
-                else:
-                    self.transcriber = ServeClientFasterWhisper.SINGLE_MODEL
-            else:
-                self.create_model(device)
+            self._initialize_model_with_device_fallback(preferred_device, single_model)
         except Exception as e:
             logging.error(f"Failed to load model: {e}")
             self.websocket.send(json.dumps({
@@ -2802,6 +2801,42 @@ class ServeClientFasterWhisper(ServeClientBase):
                 }
             )
         )
+
+    def _initialize_model_with_device_fallback(self, preferred_device: str, single_model: bool):
+        candidates = [(preferred_device, self.compute_type)]
+        if preferred_device == "cuda":
+            candidates.append(("cpu", "default"))
+
+        last_error = None
+        for device, compute_type in candidates:
+            self.compute_type = compute_type
+            try:
+                if single_model:
+                    if ServeClientFasterWhisper.SINGLE_MODEL is None:
+                        self.create_model(device)
+                        ServeClientFasterWhisper.SINGLE_MODEL = self.transcriber
+                    else:
+                        self.transcriber = ServeClientFasterWhisper.SINGLE_MODEL
+                else:
+                    self.create_model(device)
+
+                logging.info(
+                    f"FasterWhisper client {self.client_uid}: model initialized on device={device}, compute_type={compute_type}"
+                )
+                return
+            except Exception as e:
+                last_error = e
+                if device == "cuda":
+                    logging.warning(
+                        f"FasterWhisper client {self.client_uid}: CUDA model init failed ({e}); retrying on CPU"
+                    )
+                    if single_model:
+                        ServeClientFasterWhisper.SINGLE_MODEL = None
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
 
     def create_model(self, device):
         """
