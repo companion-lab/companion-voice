@@ -227,7 +227,9 @@ export async function waitForGoogleMeetingAdmission(
         // Admission indicators
         const admissionFound = await checkForGoogleAdmissionIndicators(page);
         const lobbyVisible = await checkForWaitingRoomIndicators(page);
-        if (admissionFound && !lobbyVisible) {
+        // In some Meet variants, waiting-room hints can linger even after admission.
+        // Prioritize explicit admission indicators.
+        if (admissionFound) {
           log("✅ Bot admitted during polling window (meeting controls visible)");
           return true;
         }
@@ -258,11 +260,14 @@ export async function waitForGoogleMeetingAdmission(
         const startTime2 = Date.now();
         while (Date.now() - startTime2 < timeout) {
           const stillWaiting = await checkForWaitingRoomIndicators(page);
+          const admissionFound2 = await checkForGoogleAdmissionIndicators(page);
+          if (admissionFound2) {
+            log("✅ Bot admitted while in waiting-room monitoring loop");
+            return true;
+          }
           if (!stillWaiting) {
             const isRejected2 = await checkForGoogleRejection(page);
             if (isRejected2) throw new Error("Bot admission was rejected by meeting admin");
-            const admissionFound2 = await checkForGoogleAdmissionIndicators(page);
-            if (admissionFound2) return true;
           }
           await page.waitForTimeout(checkInterval);
         }
@@ -272,8 +277,7 @@ export async function waitForGoogleMeetingAdmission(
     // Final check after waiting/polling
     log("Performing final admission check after waiting/polling window...");
     const finalAdmissionFound = await checkForGoogleAdmissionIndicators(page);
-    const finalLobbyVisible = await checkForWaitingRoomIndicators(page);
-    if (finalAdmissionFound && !finalLobbyVisible) {
+    if (finalAdmissionFound) {
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
       log("📸 Screenshot taken: Bot confirmed admitted to meeting");
       log("Successfully admitted to the Google Meet meeting");
